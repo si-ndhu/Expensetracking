@@ -1,0 +1,437 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to create a public S3 bucket
+
+Resources:
+  SnsTopic:
+    Type: AWS::SNS::Topic
+  MyS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: myreceiptbucket36
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - "PUT"
+              - "POST"
+              - "DELETE"
+              - "GET"
+            AllowedOrigins:
+              - "*"
+            MaxAge: 300
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: 's3:ObjectCreated:*'
+            Function: !GetAtt ProcessLambdaFunction.Arn
+
+#login table creation in dynamo db
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: registration36
+      AttributeDefinitions:
+        - AttributeName: username
+          AttributeType: S
+      KeySchema:
+        - AttributeName: username
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  RegisterLambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: registerlambda36
+      Runtime: python3.10
+      Handler: index.lambda_handler
+      Role: "arn:aws:iam::243704581216:role/LabRole"
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+
+          dynamodb = boto3.resource('dynamodb')
+          table = dynamodb.Table('registration36')
+
+          def lambda_handler(event, context):
+              email = event['email']
+              username = event['username']
+              password = event['password']
+
+              try:
+                  response = table.put_item(Item={'email': email, 'username': username, 'password': password})
+                  print("PutItem succeeded:", response)
+                  return {"statusCode": 200, "body": "Registration successful!"}
+              except Exception as e:
+                  print("PutItem failed:", e)
+                  return {"statusCode": 500, "body": "Registration failed. Please try again later."}
+
+  LoginLambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: loginlambda36
+      Runtime: python3.10
+      Handler: index.lambda_handler
+      Role: "arn:aws:iam::243704581216:role/LabRole"
+      Code:
+        ZipFile: |
+          import boto3 
+
+          dynamodb = boto3.resource('dynamodb')
+          table = dynamodb.Table('registration36')
+
+          def lambda_handler(event, context):
+              username = event['username']
+              password = event['password']
+
+              try:
+                  response = table.get_item(Key={'username': username})
+                  item = response.get('Item')
+
+                  if item and item['password'] == password:
+                      return {"statusCode": 200, "body": "Login successful!"}
+                  else:
+                      return {"statusCode": 401, "body": "Login failed. Invalid username or password."}
+              except Exception as e:
+                  print("Error:", e)
+                  return {"statusCode": 500, "body": "Login failed. Please try again later."}
+
+
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: testapi36
+
+  LambdaLoginPermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      FunctionName: !GetAtt LoginLambdaFunction.Arn
+      Action: "lambda:InvokeFunction"
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*"
+
+  ApiGatewayResourceLogin:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: "login"
+
+  LoginOptions:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiGatewayResourceLogin
+      HttpMethod: OPTIONS
+      Integration:
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+              "method.response.header.Access-Control-Allow-Methods": "'GET,POST,PUT,DELETE'"
+              "method.response.header.Access-Control-Allow-Origin": "'*'"
+            ResponseTemplates:
+              "application/json": ""
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          "application/json": '{"statusCode": 200}'
+        Type: MOCK
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            "method.response.header.Access-Control-Allow-Headers": true
+            "method.response.header.Access-Control-Allow-Methods": true
+            "method.response.header.Access-Control-Allow-Origin": true
+          ResponseModels:
+            "application/json": "Empty"
+
+  ApiGatewayMethodLogin:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiGatewayResourceLogin
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LoginLambdaFunction.Arn}/invocations"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: $input.json('$')
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        RequestTemplates:
+          application/json: $input.json('$')
+      RequestParameters:
+        method.request.querystring.name: false
+      MethodResponses:
+        - ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          StatusCode: "200"
+
+  LambdaRegistrationPermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      FunctionName: !Ref RegisterLambdaFunction
+      Action: "lambda:InvokeFunction"
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*"
+
+  ApiGatewayResourceRegistration:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: "registration"
+
+  RegistrationOptions:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiGatewayResourceRegistration
+      HttpMethod: OPTIONS
+      Integration:
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+              "method.response.header.Access-Control-Allow-Methods": "'GET,POST,PUT,DELETE'"
+              "method.response.header.Access-Control-Allow-Origin": "'*'"
+            ResponseTemplates:
+              "application/json": ""
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          "application/json": '{"statusCode": 200}'
+        Type: MOCK
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            "method.response.header.Access-Control-Allow-Headers": true
+            "method.response.header.Access-Control-Allow-Methods": true
+            "method.response.header.Access-Control-Allow-Origin": true
+          ResponseModels:
+            "application/json": "Empty"
+
+  ApiGatewayMethodRegistration:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiGatewayResourceRegistration
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RegisterLambdaFunction.Arn}/invocations"
+        PassthroughBehavior: WHEN_NO_MATCH
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: $input.json('$')
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        RequestTemplates:
+          application/json: $input.json('$')
+      RequestParameters:
+        method.request.querystring.name: false
+      MethodResponses:
+        - ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          StatusCode: "200"
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ApiGatewayMethodLogin
+      - ApiGatewayMethodRegistration
+    Properties:
+      RestApiId: !Ref ApiGateway
+
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref ApiGateway
+      DeploymentId: !Ref ApiDeployment
+      StageName: prod
+      Description: Production Stage
+
+  ProcessLambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: processcheck36
+      Runtime: python3.10
+      Handler: index.lambda_handler
+      Timeout: 30
+      Role: "arn:aws:iam::243704581216:role/LabRole"
+      Code:
+        ZipFile: |
+          import boto3
+          import re
+          import os
+          from botocore.exceptions import ClientError
+
+          def lambda_handler(event, context):
+              try:
+                  textract = boto3.client('textract')
+                  bucket_name = event['Records'][0]['s3']['bucket']['name']
+                  s3_key = event['Records'][0]['s3']['object']['key']
+
+                  response = textract.detect_document_text(
+                      Document={'S3Object': {'Bucket': bucket_name, 'Name': s3_key}}
+                  )
+                  # Initialize an empty array to store the extracted text
+                  all_text = []
+
+                  # Loop through the blocks in the response
+                  for eachblock in response['Blocks']:
+                      if eachblock['BlockType'] == 'LINE':
+                          text = eachblock['Text'].lower()
+                          all_text.append(text)
+
+                  store_names = ['Walmart', 'Atlantic', 'Lawtons', 'Sobeys']
+                  store_name, purchase_date, total_amount = None, None, None
+
+                  date_pattern = r'\b\d{1,2}/\d{1,2}/\d{2}\b'
+                  for text in all_text:
+                      for name in store_names:
+                          if re.search(name, text, re.IGNORECASE):
+                              store_name = name
+                              break
+                          
+                      # Check for date pattern
+                      date_match = re.search(date_pattern, text)
+                      if date_match:
+                          purchase_date = date_match.group()
+                              
+                  # Find the index of the text "total"
+                      index_total = None
+                      if 'total'==text.lower():
+                          index_total = all_text.index(text)
+                          print("index is ",index_total)
+
+                  # If "total" is found and the next element exists, extract total amount
+                      if total_amount is None and index_total is not None and index_total + 1 < len(all_text):
+                          print("entered to if loop")
+                          total_amount_text = all_text[index_total + 1]
+                          total_amount = total_amount_text
+                      
+                  # Initialize the SNS client
+                  sns = boto3.client('sns')
+                  # Get the SNS topic ARN from the environment variable
+                  sns_topic_arn = os.environ['SNS_TOPIC_ARN']
+                  # print("Lambda function started and sns topic arn is ", sns_topic_arn)
+                  # print("Your last purchase worth", {total_amount} ,"is from",{store_name},"on", {purchase_date})
+
+                  message = f"Your last purchase worth {total_amount} is from {store_name} on {purchase_date}."
+                  sns.publish(TopicArn=sns_topic_arn, Message=message)
+                  return {"statusCode": 200, "body": "File uploaded and message published successfully!"}
+                  
+              except ClientError as e:
+                  print("Error:", e)
+                  return {"statusCode": 500, "body": "File upload or processing failed. Please try again later."}
+
+      #Add the Environment property to define environment variables
+      Environment:
+        Variables:
+         SNS_TOPIC_ARN:
+           Ref: SnsTopic   # Set the SNS topic ARN as the value of the environment variable
+   
+  ProcessLambdaS3Trigger:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt ProcessLambdaFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: "arn:aws:s3:::myreceiptbucket36"
+
+  EmailSubscription:
+      Type: AWS::SNS::Subscription
+      Properties:
+        Protocol: email
+        Endpoint: bhimavarapusaisindhu@gmail.com
+        TopicArn: !Ref SnsTopic
+
+# # Outputs for the project
+# Outputs:
+#   APIGatewayURL:
+#     Description: "API Gateway URL"
+#     Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      SecurityGroups:
+        - !Ref InstanceSecurityGroup
+      KeyName: mynewkey
+      ImageId: ami-0f34c5ae932e6f0e4 
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y git python3 python3-pip
+          # Clone the Git repository containing your Flask application
+          git clone https://gitlab-ci-token:glpat-HSttBsVxHAojS86m-y5P@git.cs.dal.ca/ssb/uploadreceipt.git /home/ec2-user/app
+          sudo chown -R ec2-user:ec2-user /home/ec2-user/app
+
+          echo "API_ENDPOINT=${ApiGateway}" >> /home/ec2-user/app/.env
+          # echo "API_GATEWAY_URL=https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod" >> /home/ec2-user/app/.env
+          # !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com"
+          # Navigate to the cloned repository directory
+          cd /home/ec2-user/app
+
+          # Install any dependencies specified in requirements.txt (if applicable)
+          pip3 install -r requirements.txt
+
+          # Run the Flask application
+          python3 storecredentials.py
+
+      Tags:
+        - Key: Name
+          Value: myec236
+      
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the frontend EC2 instance
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+
+Outputs:
+  ec2PublicURL:
+    Value: !Join ['', ['http://', !GetAtt EC2Instance.PublicIp]]
+    Description: URL to access the frontend application
+  APIGatewayURL:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod"

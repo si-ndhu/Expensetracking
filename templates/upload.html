@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Upload Receipt</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+    }
+
+    .container {
+      max-width: 400px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-group label {
+      display: block;
+      font-weight: bold;
+      margin-bottom: 5px;
+    }
+
+    .form-group input[type="file"] {
+      margin-top: 5px;
+    }
+
+    .form-group input[type="submit"] {
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      cursor: pointer;
+    }
+
+    .form-group input[type="submit"]:hover {
+      background-color: #45a049;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Upload Receipt</h2>
+    <form method="post" enctype="multipart/form-data" action="/upload">
+      <div class="form-group">
+        <input type="file" id="file" name="file" 
+        accept="image/jpeg, image/png, application/pdf" required>
+      </div>
+      <div class="form-group">
+        <input type="submit" value="upload">
+      </div>
+    </form>
+  </div>
+</body>
+</html>
